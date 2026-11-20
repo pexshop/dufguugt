@@ -15,16 +15,26 @@ main{width:min(720px,100%);display:flex;flex-direction:column;gap:16px}.brand{fo
 <body><main>
 <header class="hero"><div class="brand">BLACK / PRIVATE</div><h1>你的私密空间。</h1><p>端到端加密聊天室。消息在你的设备上加密，服务器只接收密文。</p></header>
 <section class="panel" id="welcome"><h2>开始私密聊天</h2><p class="muted">创建一个新聊天室，或打开别人分享给你的邀请链接。</p><div class="row"><button id="create">创建加密聊天室</button><button class="secondary" id="copyInvite" disabled>复制邀请链接</button></div><p class="notice" id="inviteHint">创建后会生成只有持有邀请链接的人才能解密的房间密钥。请通过可信渠道分享链接。</p></section>
-<section class="panel" id="chat"><div class="row" style="justify-content:space-between;align-items:center"><div><strong>私密聊天室</strong><div class="status" id="status">正在连接…</div></div><div class="row"><button class="secondary" id="reconnect" type="button">重新连接</button><button class="secondary" id="share" type="button">分享邀请链接</button></div></div><div id="messages" aria-live="polite"></div><form id="sendForm" class="row"><input id="message" maxlength="4000" placeholder="输入加密消息…" autocomplete="off" required><button>发送</button></form><div class="notice">消息内容使用 AES-GCM 在本机加密。请保存邀请链接；丢失密钥将无法恢复历史消息。</div></section>
-<footer class="notice">BLACK-PRIVATE · 不收集账户资料 · 请勿把邀请链接发给不信任的人。</footer>
+<section class="panel" id="chat"><div class="row" style="justify-content:space-between;align-items:center"><div><strong>私密聊天室</strong><div class="status" id="status">正在连接…</div></div><div class="row"><button class="secondary" id="reconnect" type="button">重新连接</button><button class="secondary" id="share" type="button">分享邀请链接</button><button class="secondary" id="lockNow" type="button">立即锁定</button></div></div><div id="messages" aria-live="polite"></div><form id="sendForm" class="row"><input id="message" maxlength="4000" placeholder="输入加密消息…" autocomplete="off" required><button>发送</button></form><div class="notice">消息内容使用 AES-GCM 在本机加密。请保存邀请链接；丢失密钥将无法恢复历史消息。</div></section>
+<section class="panel hidden" id="locked"><h2>私密窗口已锁定</h2><p class="muted">聊天内容、页面密钥引用和地址栏中的邀请密钥已清除。重新验证后，请重新打开你保存的邀请链接。</p><button id="unlock" type="button">重新验证并解锁</button></section>
+<footer class="notice">BLACK-PRIVATE · 进入聊天室前必须完成设备认证。<a href="/device.html" style="color:#70e1c1">设备注册 / 登录</a> · 请勿把邀请链接发给不信任的人。</footer>
 </main>
 <script>
 const $=id=>document.getElementById(id);
 let roomId=null,key=null,socket=null,invite=null,seen=new Set(),myIds=new Set();
-let reconnectTimer=null,reconnectAttempts=0,manualReconnect=false,connectionId=0;
+let reconnectTimer=null,reconnectAttempts=0,manualReconnect=false,connectionId=0,heartbeatTimer=null;
 const b64=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
 const unb64=s=>Uint8Array.from(atob(s.replace(/-/g,"+").replace(/_/g,"/")+"===".slice((s.length+3)%4)),c=>c.charCodeAt(0));
 function makeInvite(){return location.origin+location.pathname+"#"+roomId+"."+b64(keyBytes)}
+async function authStatus(){
+ const response=await fetch("/api/auth/status",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:"{}"});
+ if(!response.ok)throw new Error("设备认证服务暂不可用");
+ return await response.json();
+}
+function goToDeviceLogin(){
+ const returnTo=location.pathname+location.search;
+ location.href="/device.html?return="+encodeURIComponent(returnTo);
+}
 let keyBytes;
 async function setup(id,raw){
  roomId=id;keyBytes=raw;key=await crypto.subtle.importKey("raw",raw,{name:"AES-GCM"},false,["encrypt","decrypt"]);
@@ -44,6 +54,7 @@ function scheduleReconnect(){
 function connect(force=false){
  if(!roomId)return;
  if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null;}
+ if(heartbeatTimer){clearInterval(heartbeatTimer);heartbeatTimer=null;}
  if(socket&&(socket.readyState===WebSocket.OPEN||socket.readyState===WebSocket.CONNECTING)){
   if(!force)return;
   try{socket.close(4000,"Reconnect requested");}catch{}
@@ -58,9 +69,15 @@ function connect(force=false){
   if(thisConnection!==connectionId)return;
   reconnectAttempts=0;
   $("status").textContent="已连接 · 端到端加密";
+  heartbeatTimer=setInterval(()=>{
+   if(socket===ws&&ws.readyState===WebSocket.OPEN){
+    try{ws.send(JSON.stringify({type:"auth_ping"}));}catch{}
+   }
+  },5000);
  };
  ws.onclose=()=>{
   if(thisConnection!==connectionId)return;
+  if(heartbeatTimer){clearInterval(heartbeatTimer);heartbeatTimer=null;}
   if(socket===ws)socket=null;
   scheduleReconnect();
  };
@@ -82,11 +99,32 @@ $("reconnect").onclick=()=>{
  if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null;}
  connect(true);
 };
+function lockPrivateWindow(){
+ if(!roomId)return;
+ if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null;}
+ if(heartbeatTimer){clearInterval(heartbeatTimer);heartbeatTimer=null;}
+ connectionId++;
+ const activeSocket=socket;socket=null;
+ if(activeSocket){try{activeSocket.close(1000,"Private window locked");}catch{}}
+ try{keyBytes?.fill(0);}catch{}
+ keyBytes=null;key=null;invite=null;roomId=null;
+ history.replaceState(null,"",location.pathname+location.search);
+ seen.clear();myIds.clear();
+ $("messages").replaceChildren();
+ $("message").value="";
+ $("chat").classList.add("hidden");
+ $("locked").classList.remove("hidden");
+}
+function unlockPrivateWindow(){
+ const returnTo=location.pathname+location.search+location.hash;
+ location.href="/device.html?return="+encodeURIComponent(returnTo);
+}
+$("lockNow").onclick=lockPrivateWindow;
+$("unlock").onclick=unlockPrivateWindow;
 document.addEventListener("visibilitychange",()=>{
- if(document.visibilityState==="visible"&&roomId&&(!socket||socket.readyState===WebSocket.CLOSED)){
-  reconnectAttempts=0;connect();
- }
+ if(document.visibilityState==="hidden")lockPrivateWindow();
 });
+window.addEventListener("pagehide",lockPrivateWindow);
 window.addEventListener("online",()=>{
  if(roomId&&(!socket||socket.readyState!==WebSocket.OPEN)){reconnectAttempts=0;connect();}
 });
@@ -97,7 +135,10 @@ function render(text,at,mine){
  el.append(body,time);$("messages").append(el);$("messages").scrollTop=$("messages").scrollHeight;
 }
 $("create").onclick=async()=>{
- try{const id=b64(crypto.getRandomValues(new Uint8Array(24))).replace(/[-_]/g,"a").slice(0,32).toLowerCase().replace(/[^a-f0-9]/g,"b");
+ try{
+  const auth=await authStatus();
+  if(!auth.authenticated){goToDeviceLogin();return;}
+  const id=b64(crypto.getRandomValues(new Uint8Array(24))).replace(/[-_]/g,"a").slice(0,32).toLowerCase().replace(/[^a-f0-9]/g,"b");
  const raw=crypto.getRandomValues(new Uint8Array(32));await setup(id,raw);$("copyInvite").disabled=false;$("inviteHint").textContent="聊天室已创建。点击“分享邀请链接”把密钥链接发送给聊天对象。";
  }catch(e){alert("创建失败："+e.message)}
 };
@@ -112,6 +153,15 @@ $("sendForm").onsubmit=async e=>{
 (async()=>{
  if(!crypto.subtle){$("inviteHint").textContent="需要 HTTPS 安全连接才能使用加密功能。";return}
  const parts=location.hash.slice(1).split(".");
- if(parts.length===2&&/^[a-f0-9]{32}$/.test(parts[0])){try{await setup(parts[0],unb64(parts[1]));}catch{$("inviteHint").textContent="邀请链接无效。"}}
+ if(parts.length===2&&/^[a-f0-9]{32}$/.test(parts[0])){
+  try{
+   const auth=await authStatus();
+   if(!auth.authenticated){goToDeviceLogin();return;}
+   await setup(parts[0],unb64(parts[1]));
+  }catch(e){$("inviteHint").textContent="设备认证检查失败："+e.message;}
+ }else{
+  try{const auth=await authStatus();if(!auth.authenticated)$("inviteHint").textContent="请先完成 Raspberry Pi 设备与 FIDO2 安全密钥认证，再创建或加入聊天室。";}
+  catch{$("inviteHint").textContent="设备认证服务暂不可用，请稍后重试。";}
+ }
 })();
 </script></body></html>

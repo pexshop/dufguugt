@@ -2,6 +2,10 @@ name = "black-private"
 main = "src/index.js"
 compatibility_date = "2026-11-20"
 
+[vars]
+RP_ID = "dufguugt.jaksj468.workers.dev"
+EXPECTED_ORIGIN = "https://dufguugt.jaksj468.workers.dev"
+
 [assets]
 directory = "./public"
 binding = "ASSETS"
@@ -11,6 +15,14 @@ not_found_handling = "single-page-application"
 name = "CHAT_ROOMS"
 class_name = "ChatRoom"
 
+[[durable_objects.bindings]]
+name = "AUTH_STORE"
+class_name = "AuthStore"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["ChatRoom"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["AuthStore"]
