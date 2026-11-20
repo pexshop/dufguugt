@@ -26,6 +26,35 @@ export class AuthStore {
         device && device.status === "approved" && device.memberId === member.id);
       return Response.json({ active });
     }
+    if (op === "take" && typeof key === "string") {
+      const result = await this.ctx.storage.transaction(async (txn) => {
+        const current = await txn.get(key);
+        if (current === undefined) return null;
+        await txn.delete(key);
+        return current;
+      });
+      return Response.json({ value: result ?? null });
+    }
+    if (op === "claim-invite" && typeof key === "string") {
+      const result = await this.ctx.storage.transaction(async (txn) => {
+        const invite = await txn.get(key);
+        if (!invite || invite.used || invite.expiresAt < Date.now()) return false;
+        invite.used = true;
+        invite.usedAt = Date.now();
+        await txn.put(key, invite);
+        return true;
+      });
+      return Response.json({ claimed: result });
+    }
+    if (op === "claim-bootstrap") {
+      const result = await this.ctx.storage.transaction(async (txn) => {
+        const marker = "system:admin-bootstrap-used";
+        if (await txn.get(marker)) return false;
+        await txn.put(marker, true);
+        return true;
+      });
+      return Response.json({ claimed: result });
+    }
     if (op === "put" && typeof key === "string") {
       await this.ctx.storage.put(key, value);
       return Response.json({ ok: true });
