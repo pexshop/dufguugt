@@ -17,6 +17,15 @@ export class AuthStore {
     if (op === "get" && typeof key === "string") {
       return Response.json({ value: (await this.ctx.storage.get(key)) ?? null });
     }
+    if (op === "check-session" && typeof key === "string") {
+      const session = await this.ctx.storage.get(`session:${key}`);
+      if (!session || session.expiresAt < Date.now()) return Response.json({ active: false });
+      const member = await this.ctx.storage.get(`member:${session.memberId}`);
+      const device = await this.ctx.storage.get(`device:${session.deviceId}`);
+      const active = Boolean(member && member.status === "approved" &&
+        device && device.status === "approved" && device.memberId === member.id);
+      return Response.json({ active });
+    }
     if (op === "put" && typeof key === "string") {
       await this.ctx.storage.put(key, value);
       return Response.json({ ok: true });
