@@ -56,6 +56,14 @@ const AGENT="http://127.0.0.1:8765";
 const b64uToBytes=s=>Uint8Array.from(atob(s.replace(/-/g,"+").replace(/_/g,"/")+"===".slice((s.length+3)%4)),c=>c.charCodeAt(0));
 const bytesToB64u=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");
 function show(message){$("status").textContent=message;}
+function returnAfterLogin(){
+ const value=new URLSearchParams(location.search).get("return");
+ if(!value)return;
+ try{
+  const target=new URL(value,location.origin);
+  if(target.origin===location.origin)location.replace(target.href);
+ }catch{}
+}
 async function api(path,data,headers={}){
  const response=await fetch(API+path,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json",...headers},body:JSON.stringify(data||{})});
  const result=await response.json().catch(()=>({error:"服务器返回了无效响应"}));
@@ -146,7 +154,8 @@ $("login").onclick=async()=>{
   show("正在验证 Raspberry Pi 设备密钥…");
   const deviceSignature=await signDevice(start.deviceChallenge);
   await api("/auth/finish",{flowId:start.flowId,credential,deviceSignature});
-  show("登录成功。现在可以打开你的 BLACK-PRIVATE 聊天邀请链接。");
+  show("登录成功，正在返回 BLACK-PRIVATE…");
+  returnAfterLogin();
  }catch(e){show("登录失败："+e.message);}
 };
 
