@@ -10,7 +10,7 @@ export class ChatRoom {
   constructor(ctx, env) {
     this.ctx = ctx;
     this.env = env;
-    this.sessions = new Set();
+    this.sessions = new Map();
   }
 
   async fetch(request) {
@@ -18,19 +18,31 @@ export class ChatRoom {
       return new Response("WebSocket connection required", { status: 426 });
     }
 
+    const sessionHash = request.headers.get("X-BP-Session-Hash");
+    if (!sessionHash) return new Response("Authentication required", { status: 401 });
+
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
     server.accept();
-    this.sessions.add(server);
+    this.sessions.set(server, sessionHash);
 
     server.addEventListener("message", async (event) => {
       try {
+        if (!(await this.isSessionActive(sessionHash))) {
+          try { server.close(1008, "Session revoked"); } catch {}
+          this.sessions.delete(server);
+          return;
+        }
         if (typeof event.data !== "string" || event.data.length > MAX_MESSAGE_BYTES) {
           server.send(JSON.stringify({ type: "error", message: "Message too large or invalid." }));
           return;
         }
         const packet = JSON.parse(event.data);
+        if (packet.type === "auth_ping") {
+          server.send(JSON.stringify({ type: "auth_pong" }));
+          return;
+        }
         if (packet.type !== "message" || typeof packet.id !== "string" ||
             typeof packet.iv !== "string" || typeof packet.ciphertext !== "string" ||
             typeof packet.createdAt !== "number") return;
@@ -53,7 +65,7 @@ export class ChatRoom {
           }
         }
         const outgoing = JSON.stringify(record);
-        for (const socket of this.sessions) {
+        for (const socket of this.sessions.keys()) {
           try { socket.send(outgoing); } catch { this.sessions.delete(socket); }
         }
       } catch {
@@ -74,6 +86,22 @@ export class ChatRoom {
 
     return new Response(null, { status: 101, webSocket: client });
   }
+
+  async isSessionActive(sessionHash) {
+    try {
+      const stub = this.env.AUTH_STORE.get(this.env.AUTH_STORE.idFromName("global"));
+      const response = await stub.fetch("https://auth-store.internal/_internal/store", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ op: "check-session", key: sessionHash }),
+      });
+      if (!response.ok) return false;
+      const result = await response.json();
+      return result.active === true;
+    } catch {
+      return false;
+    }
+  }
 }
 
 export default {
@@ -90,11 +118,14 @@ export default {
 
     const match = url.pathname.match(/^\/room\/([a-f0-9]{32})$/);
     if (match && request.headers.get("Upgrade") === "websocket") {
-      let authorized = false;
-      try { authorized = await authorizeRoom(request, env); } catch {}
-      if (!authorized) return new Response("Authentication required", { status: 401 });
+      let session = null;
+      try { session = await authorizeRoom(request, env); } catch {}
+      if (!session) return new Response("Authentication required", { status: 401 });
+      const headers = new Headers(request.headers);
+      headers.set("X-BP-Session-Hash", session.hash);
+      const authorizedRequest = new Request(request, { headers });
       const id = env.CHAT_ROOMS.idFromName(match[1]);
-      return env.CHAT_ROOMS.get(id).fetch(request);
+      return env.CHAT_ROOMS.get(id).fetch(authorizedRequest);
     }
 
     return env.ASSETS.fetch(request);
