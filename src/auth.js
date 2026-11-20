@@ -18,12 +18,12 @@ const json = (data, status = 200, headers = {}) =>
   Response.json(data, { status, headers });
 const fail = (message, status = 400) => json({ error: message }, status);
 
-async function store(env, op, key, value) {
+async function store(env, op, key, value, prefix) {
   const stub = env.AUTH_STORE.get(env.AUTH_STORE.idFromName("global"));
   const response = await stub.fetch("https://auth-store.internal/_internal/store", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ op, key, value }),
+    body: JSON.stringify({ op, key, value, prefix }),
   });
   if (!response.ok) throw new Error("Authentication storage unavailable");
   return response.json();
@@ -31,6 +31,7 @@ async function store(env, op, key, value) {
 const get = async (env, key) => (await store(env, "get", key)).value;
 const put = (env, key, value) => store(env, "put", key, value);
 const del = (env, key) => store(env, "delete", key);
+const list = (env, prefix) => store(env, "list", null, null, prefix);
 
 function cookieValue(request, name) {
   const raw = request.headers.get("Cookie") || "";
@@ -151,7 +152,7 @@ export async function handleAuth(request, env) {
       const info = verification.registrationInfo;
       const member = { id: randomId(16), name: flow.name, role: "admin", status: "approved", createdAt: Date.now() };
       const device = { id: randomId(16), memberId: member.id, name: "Administrator Raspberry Pi", publicKey: flow.devicePublicKey, status: "approved", createdAt: Date.now() };
-      const credential = { id: info.credential.id, publicKey: info.credential.publicKey, counter: info.credential.counter, transports: info.credential.transports || [] };
+      const credential = { id: info.credential.id, publicKey: b64u(info.credential.publicKey), counter: info.credential.counter, transports: info.credential.transports || [] };
       await put(env, `member:${member.id}`, member);
       await put(env, `device:${device.id}`, device);
       await put(env, `credential:${credential.id}`, { ...credential, memberId: member.id });
@@ -204,7 +205,7 @@ export async function handleAuth(request, env) {
       const info = verification.registrationInfo;
       const member = { id: randomId(16), name: flow.name, role: "member", status: "pending", createdAt: Date.now() };
       const device = { id: randomId(16), memberId: member.id, name: "Raspberry Pi device", publicKey: flow.devicePublicKey, status: "pending", createdAt: Date.now() };
-      const credential = { id: info.credential.id, publicKey: info.credential.publicKey, counter: info.credential.counter, transports: info.credential.transports || [] };
+      const credential = { id: info.credential.id, publicKey: b64u(info.credential.publicKey), counter: info.credential.counter, transports: info.credential.transports || [] };
       invite.used = true;
       await put(env, `invite:${flow.inviteHash}`, invite);
       await put(env, `member:${member.id}`, member);
@@ -221,8 +222,8 @@ export async function handleAuth(request, env) {
       if (!member || member.status !== "approved" || !device || device.status !== "approved" || device.memberId !== member.id) {
         return fail("Member or Raspberry Pi device is not approved", 403);
       }
-      const entries = await store(env, "list", null, null);
-      const credentials = entries.entries.filter(([key, value]) => key.startsWith("credential:") && value.memberId === member.id).map(([, value]) => value);
+      const entries = await list(env, "credential:");
+      const credentials = entries.entries.filter(([, value]) => value.memberId === member.id).map(([, value]) => value);
       if (!credentials.length) return fail("No registered security key", 403);
       const flowId = randomId(), deviceChallenge = randomId(32);
       const options = await generateAuthenticationOptions({
@@ -250,7 +251,7 @@ export async function handleAuth(request, env) {
       const verification = await verifyAuthenticationResponse({
         response: body.credential, expectedChallenge: flow.challenge,
         expectedOrigin: cfg.origin, expectedRPID: cfg.rpID,
-        credential: { id: credential.id, publicKey: credential.publicKey, counter: credential.counter, transports: credential.transports },
+        credential: { id: credential.id, publicKey: unb64u(credential.publicKey), counter: credential.counter, transports: credential.transports },
         requireUserVerification: true,
       });
       if (!verification.verified) return fail("Security key authentication failed", 401);
@@ -264,10 +265,8 @@ export async function handleAuth(request, env) {
     if (path === "/api/admin/members") {
       const admin = await requireAdmin(request, env);
       if (!admin) return fail("Administrator authentication required", 401);
-      const members = (await store(env, "list", null, null)).entries
-        .filter(([key]) => key.startsWith("member:")).map(([, value]) => value);
-      const devices = (await store(env, "list", null, null)).entries
-        .filter(([key]) => key.startsWith("device:")).map(([, value]) => value);
+      const members = (await list(env, "member:")).entries.map(([, value]) => value);
+      const devices = (await list(env, "device:")).entries.map(([, value]) => value);
       return json({ members, devices });
     }
 
