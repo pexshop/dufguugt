@@ -18,5 +18,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm install
+      - name: Check JavaScript syntax
+        run: node --check src/index.js && node --check src/auth.js && node --check src/auth-store.js
+      - name: Check Raspberry Pi agent syntax
+        run: python -m py_compile raspberry-pi/device_agent.py
       - name: Validate Worker bundle without deploying
         run: npx wrangler deploy --dry-run
