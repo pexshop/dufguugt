@@ -293,6 +293,23 @@ export async function handleAuth(request, env) {
       return json({ revoked: true });
     }
 
+    if (path === "/api/admin/revoke-member") {
+      const admin = await requireAdmin(request, env);
+      if (!admin) return fail("Administrator authentication required", 401);
+      if (body.memberId === admin.member.id) return fail("Use a separate recovery procedure to revoke the active administrator", 400);
+      const member = await get(env, `member:${body.memberId}`);
+      if (!member) return fail("Member not found", 404);
+      member.status = "revoked"; member.revokedAt = Date.now();
+      await put(env, `member:${member.id}`, member);
+      const devices = (await list(env, "device:")).entries
+        .filter(([, device]) => device.memberId === member.id);
+      for (const [key, device] of devices) {
+        device.status = "revoked"; device.revokedAt = Date.now();
+        await put(env, key, device);
+      }
+      return json({ revoked: true });
+    }
+
     if (path === "/api/auth/logout") {
       const token = cookieValue(request, "bp_session");
       if (token) await del(env, `session:${await digest(token)}`);
