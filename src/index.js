@@ -26,6 +26,7 @@ export class ChatRoom {
     const server = pair[1];
     server.accept();
     this.sessions.set(server, sessionHash);
+    this.ctx.storage.setAlarm(Date.now() + 5_000).catch(() => {});
 
     server.addEventListener("message", async (event) => {
       try {
@@ -65,7 +66,12 @@ export class ChatRoom {
           }
         }
         const outgoing = JSON.stringify(record);
-        for (const socket of this.sessions.keys()) {
+        for (const [socket, socketSessionHash] of this.sessions) {
+          if (!(await this.isSessionActive(socketSessionHash))) {
+            try { socket.close(1008, "Session revoked"); } catch {}
+            this.sessions.delete(socket);
+            continue;
+          }
           try { socket.send(outgoing); } catch { this.sessions.delete(socket); }
         }
       } catch {
@@ -85,6 +91,18 @@ export class ChatRoom {
     }).catch(() => {});
 
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async alarm() {
+    for (const [socket, sessionHash] of this.sessions) {
+      if (!(await this.isSessionActive(sessionHash))) {
+        try { socket.close(1008, "Session revoked"); } catch {}
+        this.sessions.delete(socket);
+      }
+    }
+    if (this.sessions.size > 0) {
+      await this.ctx.storage.setAlarm(Date.now() + 5_000);
+    }
   }
 
   async isSessionActive(sessionHash) {
