@@ -53,30 +53,30 @@ def public_jwk():
 
 
 class Handler(BaseHTTPRequestHandler):
-    def _cors(self):
-        origin = self.headers.get("Origin")
-        if origin != ORIGIN:
-            self.send_error(403, "Origin rejected")
-            return False
+    def _origin_ok(self):
+        return self.headers.get("Origin") == ORIGIN
+
+    def _cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", ORIGIN)
         self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Max-Age", "300")
-        return True
 
     def do_OPTIONS(self):
         if self.headers.get("Origin") != ORIGIN:
             self.send_error(403, "Origin rejected")
             return
         self.send_response(204)
-        self._cors()
+        self._cors_headers()
         self.end_headers()
 
     def _send_json(self, payload, status=200):
-        self.send_response(status)
-        if not self._cors():
+        if not self._origin_ok():
+            self.send_error(403, "Origin rejected")
             return
+        self.send_response(status)
+        self._cors_headers()
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
