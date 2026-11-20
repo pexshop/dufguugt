@@ -17,6 +17,8 @@ jobs:
         with:
           node-version: 22
       - run: npm install
+      - name: Run security regression tests
+        run: npm test
       - name: Check JavaScript syntax
         run: |
           node --check src/index.js
