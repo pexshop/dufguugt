@@ -15,12 +15,13 @@ main{width:min(720px,100%);display:flex;flex-direction:column;gap:16px}.brand{fo
 <body><main>
 <header class="hero"><div class="brand">BLACK / PRIVATE</div><h1>你的私密空间。</h1><p>端到端加密聊天室。消息在你的设备上加密，服务器只接收密文。</p></header>
 <section class="panel" id="welcome"><h2>开始私密聊天</h2><p class="muted">创建一个新聊天室，或打开别人分享给你的邀请链接。</p><div class="row"><button id="create">创建加密聊天室</button><button class="secondary" id="copyInvite" disabled>复制邀请链接</button></div><p class="notice" id="inviteHint">创建后会生成只有持有邀请链接的人才能解密的房间密钥。请通过可信渠道分享链接。</p></section>
-<section class="panel" id="chat"><div class="row" style="justify-content:space-between;align-items:center"><div><strong>私密聊天室</strong><div class="status" id="status">正在连接…</div></div><button class="secondary" id="share">分享邀请链接</button></div><div id="messages" aria-live="polite"></div><form id="sendForm" class="row"><input id="message" maxlength="4000" placeholder="输入加密消息…" autocomplete="off" required><button>发送</button></form><div class="notice">消息内容使用 AES-GCM 在本机加密。请保存邀请链接；丢失密钥将无法恢复历史消息。</div></section>
+<section class="panel" id="chat"><div class="row" style="justify-content:space-between;align-items:center"><div><strong>私密聊天室</strong><div class="status" id="status">正在连接…</div></div><div class="row"><button class="secondary" id="reconnect" type="button">重新连接</button><button class="secondary" id="share" type="button">分享邀请链接</button></div></div><div id="messages" aria-live="polite"></div><form id="sendForm" class="row"><input id="message" maxlength="4000" placeholder="输入加密消息…" autocomplete="off" required><button>发送</button></form><div class="notice">消息内容使用 AES-GCM 在本机加密。请保存邀请链接；丢失密钥将无法恢复历史消息。</div></section>
 <footer class="notice">BLACK-PRIVATE · 不收集账户资料 · 请勿把邀请链接发给不信任的人。</footer>
 </main>
 <script>
 const $=id=>document.getElementById(id);
 let roomId=null,key=null,socket=null,invite=null,seen=new Set(),myIds=new Set();
+let reconnectTimer=null,reconnectAttempts=0,manualReconnect=false,connectionId=0;
 const b64=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
 const unb64=s=>Uint8Array.from(atob(s.replace(/-/g,"+").replace(/_/g,"/")+"===".slice((s.length+3)%4)),c=>c.charCodeAt(0));
 function makeInvite(){return location.origin+location.pathname+"#"+roomId+"."+b64(keyBytes)}
@@ -33,19 +34,62 @@ async function setup(id,raw){
  $("status").textContent="正在连接安全通道…";
  connect();
 }
-function connect(){
+function scheduleReconnect(){
+ if(reconnectTimer||!roomId)return;
+ const delay=Math.min(1000*Math.pow(2,reconnectAttempts),30000);
+ reconnectAttempts=Math.min(reconnectAttempts+1,5);
+ $("status").textContent="连接中断，"+Math.ceil(delay/1000)+" 秒后自动重连…";
+ reconnectTimer=setTimeout(()=>{reconnectTimer=null;connect();},delay);
+}
+function connect(force=false){
+ if(!roomId)return;
+ if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null;}
+ if(socket&&(socket.readyState===WebSocket.OPEN||socket.readyState===WebSocket.CONNECTING)){
+  if(!force)return;
+  try{socket.close(4000,"Reconnect requested");}catch{}
+ }
+ const thisConnection=++connectionId;
  const proto=location.protocol==="https:"?"wss:":"ws:";
- socket=new WebSocket(proto+"//"+location.host+"/room/"+roomId);
- socket.onopen=()=>$("status").textContent="已连接 · 端到端加密";
- socket.onclose=()=>$("status").textContent="连接已断开，正在尝试重连…";
- socket.onerror=()=>$("status").textContent="连接错误";
- socket.onmessage=async e=>{
+ $("status").textContent="正在连接安全通道…";
+ let ws;
+ try{ws=new WebSocket(proto+"//"+location.host+"/room/"+roomId);socket=ws;}
+ catch{scheduleReconnect();return;}
+ ws.onopen=()=>{
+  if(thisConnection!==connectionId)return;
+  reconnectAttempts=0;
+  $("status").textContent="已连接 · 端到端加密";
+ };
+ ws.onclose=()=>{
+  if(thisConnection!==connectionId)return;
+  if(socket===ws)socket=null;
+  scheduleReconnect();
+ };
+ ws.onerror=()=>{
+  if(thisConnection!==connectionId)return;
+  $("status").textContent="连接出现问题，准备重连…";
+  try{ws.close();}catch{scheduleReconnect();}
+ };
+ ws.onmessage=async e=>{
+  if(thisConnection!==connectionId)return;
   try{const p=JSON.parse(e.data);if(p.type!=="message"||seen.has(p.id))return;seen.add(p.id);
    const plain=await crypto.subtle.decrypt({name:"AES-GCM",iv:unb64(p.iv)},key,unb64(p.ciphertext));
    const data=JSON.parse(new TextDecoder().decode(plain));render(data.text,p.createdAt,myIds.has(p.id));
   }catch{}
  };
 }
+$("reconnect").onclick=()=>{
+ reconnectAttempts=0;
+ if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null;}
+ connect(true);
+};
+document.addEventListener("visibilitychange",()=>{
+ if(document.visibilityState==="visible"&&roomId&&(!socket||socket.readyState===WebSocket.CLOSED)){
+  reconnectAttempts=0;connect();
+ }
+});
+window.addEventListener("online",()=>{
+ if(roomId&&(!socket||socket.readyState!==WebSocket.OPEN)){reconnectAttempts=0;connect();}
+});
 function render(text,at,mine){
  const el=document.createElement("div");el.className="msg"+(mine?" mine":"");
  const body=document.createElement("div");body.textContent=text;
