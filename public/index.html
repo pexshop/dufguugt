@@ -21,7 +21,7 @@ main{width:min(720px,100%);display:flex;flex-direction:column;gap:16px}.brand{fo
 <script>
 const $=id=>document.getElementById(id);
 let roomId=null,key=null,socket=null,invite=null,seen=new Set(),myIds=new Set();
-let reconnectTimer=null,reconnectAttempts=0,manualReconnect=false,connectionId=0;
+let reconnectTimer=null,reconnectAttempts=0,manualReconnect=false,connectionId=0,heartbeatTimer=null;
 const b64=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
 const unb64=s=>Uint8Array.from(atob(s.replace(/-/g,"+").replace(/_/g,"/")+"===".slice((s.length+3)%4)),c=>c.charCodeAt(0));
 function makeInvite(){return location.origin+location.pathname+"#"+roomId+"."+b64(keyBytes)}
@@ -44,6 +44,7 @@ function scheduleReconnect(){
 function connect(force=false){
  if(!roomId)return;
  if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null;}
+ if(heartbeatTimer){clearInterval(heartbeatTimer);heartbeatTimer=null;}
  if(socket&&(socket.readyState===WebSocket.OPEN||socket.readyState===WebSocket.CONNECTING)){
   if(!force)return;
   try{socket.close(4000,"Reconnect requested");}catch{}
@@ -58,9 +59,15 @@ function connect(force=false){
   if(thisConnection!==connectionId)return;
   reconnectAttempts=0;
   $("status").textContent="已连接 · 端到端加密";
+  heartbeatTimer=setInterval(()=>{
+   if(socket===ws&&ws.readyState===WebSocket.OPEN){
+    try{ws.send(JSON.stringify({type:"auth_ping"}));}catch{}
+   }
+  },5000);
  };
  ws.onclose=()=>{
   if(thisConnection!==connectionId)return;
+  if(heartbeatTimer){clearInterval(heartbeatTimer);heartbeatTimer=null;}
   if(socket===ws)socket=null;
   scheduleReconnect();
  };
