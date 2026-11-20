@@ -29,6 +29,9 @@ async function store(env, op, key, value, prefix) {
   return response.json();
 }
 const get = async (env, key) => (await store(env, "get", key)).value;
+const take = async (env, key) => (await store(env, "take", key)).value;
+const claimInvite = async (env, key) => (await store(env, "claim-invite", key)).claimed === true;
+const claimBootstrap = async (env) => (await store(env, "claim-bootstrap")).claimed === true;
 const put = (env, key, value) => store(env, "put", key, value);
 const del = (env, key) => store(env, "delete", key);
 const list = (env, prefix) => store(env, "list", null, null, prefix);
@@ -150,13 +153,15 @@ export async function handleAuth(request, env) {
       });
       if (!verification.verified || !verification.registrationInfo) return fail("Security key verification failed", 401);
       const info = verification.registrationInfo;
+      const consumedFlow = await take(env, `flow:register:${body.flowId}`);
+      if (!consumedFlow || !consumedFlow.bootstrap || consumedFlow.challenge !== flow.challenge ||
+          !(await claimBootstrap(env))) return fail("Administrator bootstrap flow already used", 409);
       const member = { id: randomId(16), name: flow.name, role: "admin", status: "approved", createdAt: Date.now() };
       const device = { id: randomId(16), memberId: member.id, name: "Administrator Raspberry Pi", publicKey: flow.devicePublicKey, status: "approved", createdAt: Date.now() };
       const credential = { id: info.credential.id, publicKey: b64u(info.credential.publicKey), counter: info.credential.counter, transports: info.credential.transports || [] };
       await put(env, `member:${member.id}`, member);
       await put(env, `device:${device.id}`, device);
       await put(env, `credential:${credential.id}`, { ...credential, memberId: member.id });
-      await put(env, "system:admin-bootstrap-used", true);
       await del(env, `flow:register:${body.flowId}`);
       const token = await createSession(env, member, device);
       return json({ verified: true, memberId: member.id, deviceId: device.id }, 200, { "Set-Cookie": sessionCookie(token) });
@@ -203,11 +208,14 @@ export async function handleAuth(request, env) {
       });
       if (!verification.verified || !verification.registrationInfo) return fail("Security key verification failed", 401);
       const info = verification.registrationInfo;
+      const consumedFlow = await take(env, `flow:register:${body.flowId}`);
+      if (!consumedFlow || consumedFlow.bootstrap || consumedFlow.challenge !== flow.challenge ||
+          !(await claimInvite(env, `invite:${flow.inviteHash}`))) {
+        return fail("Enrollment flow or invite already used", 409);
+      }
       const member = { id: randomId(16), name: flow.name, role: "member", status: "pending", createdAt: Date.now() };
       const device = { id: randomId(16), memberId: member.id, name: "Raspberry Pi device", publicKey: flow.devicePublicKey, status: "pending", createdAt: Date.now() };
       const credential = { id: info.credential.id, publicKey: b64u(info.credential.publicKey), counter: info.credential.counter, transports: info.credential.transports || [] };
-      invite.used = true;
-      await put(env, `invite:${flow.inviteHash}`, invite);
       await put(env, `member:${member.id}`, member);
       await put(env, `device:${device.id}`, device);
       await put(env, `credential:${credential.id}`, { ...credential, memberId: member.id });
@@ -255,9 +263,13 @@ export async function handleAuth(request, env) {
         requireUserVerification: true,
       });
       if (!verification.verified) return fail("Security key authentication failed", 401);
+      const consumedFlow = await take(env, `flow:login:${body.flowId}`);
+      if (!consumedFlow || consumedFlow.challenge !== flow.challenge ||
+          consumedFlow.memberId !== member.id || consumedFlow.deviceId !== device.id) {
+        return fail("Login challenge already used", 409);
+      }
       credential.counter = verification.authenticationInfo.newCounter;
       await put(env, `credential:${credential.id}`, credential);
-      await del(env, `flow:login:${body.flowId}`);
       const token = await createSession(env, member, device);
       return json({ authenticated: true, role: member.role }, 200, { "Set-Cookie": sessionCookie(token) });
     }
