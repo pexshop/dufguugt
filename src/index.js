@@ -1,5 +1,10 @@
+import { handleAuth, authorizeRoom } from "./auth.js";
+import { AuthStore } from "./auth-store.js";
+
 const MAX_HISTORY = 100;
 const MAX_MESSAGE_BYTES = 16_000;
+
+export { AuthStore };
 
 export class ChatRoom {
   constructor(ctx, env) {
@@ -74,12 +79,20 @@ export class ChatRoom {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    if (url.pathname.startsWith("/api/")) {
+      return await handleAuth(request, env);
+    }
+
     if (url.pathname === "/health") {
-      return Response.json({ name: "BLACK-PRIVATE", status: "ok" });
+      return Response.json({ name: "BLACK-PRIVATE", status: "ok", auth: "device-gated" });
     }
 
     const match = url.pathname.match(/^\/room\/([a-f0-9]{32})$/);
     if (match && request.headers.get("Upgrade") === "websocket") {
+      let authorized = false;
+      try { authorized = await authorizeRoom(request, env); } catch {}
+      if (!authorized) return new Response("Authentication required", { status: 401 });
       const id = env.CHAT_ROOMS.idFromName(match[1]);
       return env.CHAT_ROOMS.get(id).fetch(request);
     }
