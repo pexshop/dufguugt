@@ -18,7 +18,13 @@ jobs:
           node-version: 22
       - run: npm install
       - name: Check JavaScript syntax
-        run: node --check src/index.js && node --check src/auth.js && node --check src/auth-store.js
+        run: |
+          node --check src/index.js
+          node --check src/auth.js
+          node --check src/auth-store.js
+          python -c "from pathlib import Path; import re; [Path('/tmp/'+name+'.js').write_text(re.search(r'<script>(.*?)</script>', Path(path).read_text(), re.S).group(1)) for name,path in [('chat','public/index.html'),('device','public/device.html')]]"
+          node --check /tmp/chat.js
+          node --check /tmp/device.js
       - name: Check Raspberry Pi agent syntax
         run: python -m py_compile raspberry-pi/device_agent.py
       - name: Validate Worker bundle without deploying
