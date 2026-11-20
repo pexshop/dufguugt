@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#090d14"><title>BLACK-PRIVATE 设备管理</title>
+<style>
+:root{color-scheme:dark;--bg:#090d14;--panel:#111925;--line:#28394d;--text:#edf3fa;--muted:#9aacc0;--accent:#70e1c1;--danger:#ff8585}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top,#172a3d,var(--bg) 60%);color:var(--text);font:15px system-ui,-apple-system,sans-serif;padding:20px 14px}
+main{width:min(760px,100%);margin:auto}.brand{color:var(--accent);letter-spacing:.2em;font-weight:800;font-size:12px}h1{font-size:30px;margin:8px 0}h2{font-size:18px;margin:0 0 12px}p{color:var(--muted);line-height:1.55}.panel{background:#111925;border:1px solid var(--line);border-radius:16px;padding:17px;margin:14px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}label{display:block;color:var(--muted);font-size:13px;margin:10px 0 5px}input{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:#09121d;color:var(--text);font:inherit}button{padding:11px 14px;border:0;border-radius:10px;background:var(--accent);color:#07130f;font:inherit;font-weight:750;cursor:pointer;margin:8px 6px 0 0}button.secondary{background:#233448;color:var(--text)}button.danger{background:#542b34;color:#ffe1e1}.small{font-size:12px;color:var(--muted)}.status{white-space:pre-wrap;background:#0b1520;border:1px solid var(--line);border-radius:10px;padding:12px;min-height:42px;margin:12px 0;color:#b9d8d0}.hidden{display:none!important}.item{padding:12px;border:1px solid var(--line);border-radius:10px;margin:8px 0;overflow-wrap:anywhere}.item strong{display:block}.pill{display:inline-block;padding:3px 8px;border-radius:99px;background:#26384b;color:#d8e5f1;font-size:11px;margin-top:5px}a{color:var(--accent)}
+</style>
+</head>
+<body><main>
+<div class="brand">BLACK / PRIVATE</div><h1>设备认证控制台</h1>
+<p>请在 Raspberry Pi 本机浏览器打开此页面，并确保本机设备代理正在运行。设备密钥和成员 FIDO2 安全密钥需要同时验证。</p>
+<div class="status" id="status">正在检查 Raspberry Pi 本地设备代理…</div>
+
+<section class="panel">
+<h2>管理员首次初始化</h2>
+<p class="small">仅在第一次创建管理员时使用。管理员必须在 Cloudflare Worker Secret 中预先设置 ADMIN_BOOTSTRAP_SECRET。</p>
+<label>管理员名称</label><input id="adminName" placeholder="管理员">
+<label>一次性初始化密钥</label><input id="bootstrapSecret" type="password" autocomplete="off">
+<button id="bootstrap">注册管理员硬件安全密钥</button>
+</section>
+
+<section class="panel">
+<h2>成员注册</h2>
+<p class="small">由管理员生成一次性邀请。成员在自己的 Raspberry Pi 上打开本页，绑定自己的 FIDO2 安全密钥；注册后等待管理员批准。</p>
+<label>管理员邀请令牌</label><input id="inviteToken" placeholder="粘贴管理员提供的邀请令牌">
+<label>成员名称</label><input id="memberName" placeholder="成员名称">
+<button id="enroll">注册本设备与安全密钥</button>
+</section>
+
+<section class="panel">
+<h2>登录</h2>
+<p class="small">登录前需要管理员批准成员和 Raspberry Pi 设备。注册完成后，ID 会保存在当前浏览器。</p>
+<label>成员 ID</label><input id="memberId" placeholder="注册返回的 memberId">
+<label>设备 ID</label><input id="deviceId" placeholder="注册返回的 deviceId">
+<button id="login">使用硬件安全密钥登录</button>
+<button class="secondary" id="logout">退出登录</button>
+</section>
+
+<section class="panel">
+<h2>管理员控制</h2>
+<button id="makeInvite">生成成员邀请</button>
+<button class="secondary" id="refresh">刷新成员与设备</button>
+<div id="inviteOutput" class="status hidden"></div>
+<div id="members"></div>
+</section>
+
+<p class="small">安全说明：本机代理使用 Ed25519 软件密钥证明持有设备密钥，不是 Raspberry Pi 芯片级证明。密钥文件位于 ~/.black-private/device-ed25519.pem。请勿复制或公开该文件。</p>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const API="/api";
+const AGENT="http://127.0.0.1:8765";
+const b64uToBytes=s=>Uint8Array.from(atob(s.replace(/-/g,"+").replace(/_/g,"/")+"===".slice((s.length+3)%4)),c=>c.charCodeAt(0));
+const bytesToB64u=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");
+function show(message){$("status").textContent=message;}
+async function api(path,data,headers={}){
+ const response=await fetch(API+path,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json",...headers},body:JSON.stringify(data||{})});
+ const result=await response.json().catch(()=>({error:"服务器返回了无效响应"}));
+ if(!response.ok)throw new Error(result.error||("HTTP "+response.status));
+ return result;
+}
+async function agent(path,body){
+ const response=await fetch(AGENT+path,{method:body?"POST":"GET",headers:body?{"Content-Type":"application/json"}:{},body:body?JSON.stringify(body):undefined,cache:"no-store"});
+ const result=await response.json();
+ if(!response.ok)throw new Error(result.error||"本机设备代理不可用");
+ return result;
+}
+async function deviceKey(){return (await agent("/public-key")).publicKey;}
+async function signDevice(challenge){return (await agent("/sign",{challenge})).signature;}
+function creationOptions(o){
+ const p={...o,challenge:b64uToBytes(o.challenge),user:{...o.user,id:b64uToBytes(o.user.id)}};
+ if(o.excludeCredentials)p.excludeCredentials=o.excludeCredentials.map(c=>({...c,id:b64uToBytes(c.id)}));
+ return p;
+}
+function requestOptions(o){
+ const p={...o,challenge:b64uToBytes(o.challenge)};
+ if(o.allowCredentials)p.allowCredentials=o.allowCredentials.map(c=>({...c,id:b64uToBytes(c.id)}));
+ return p;
+}
+function credentialJSON(c){
+ const r=c.response;
+ const out={id:c.id,rawId:bytesToB64u(c.rawId),type:c.type,clientExtensionResults:c.getClientExtensionResults(),response:{clientDataJSON:bytesToB64u(r.clientDataJSON)}};
+ if(r.attestationObject)out.response.attestationObject=bytesToB64u(r.attestationObject);
+ if(r.authenticatorData)out.response.authenticatorData=bytesToB64u(r.authenticatorData);
+ if(r.signature)out.response.signature=bytesToB64u(r.signature);
+ if(r.userHandle)out.response.userHandle=bytesToB64u(r.userHandle);
+ if(r.getTransports)out.response.transports=r.getTransports();
+ return out;
+}
+async function registerSecurityKey(options){
+ if(!window.PublicKeyCredential||!navigator.credentials)throw new Error("当前浏览器不支持 WebAuthn，请使用 Raspberry Pi 上的新版 Chromium。");
+ const credential=await navigator.credentials.create({publicKey:creationOptions(options)});
+ return credentialJSON(credential);
+}
+async function authenticateSecurityKey(options){
+ if(!window.PublicKeyCredential||!navigator.credentials)throw new Error("当前浏览器不支持 WebAuthn。");
+ const credential=await navigator.credentials.get({publicKey:requestOptions(options)});
+ return credentialJSON(credential);
+}
+function saveIds(memberId,deviceId){localStorage.setItem("bp_member_id",memberId);localStorage.setItem("bp_device_id",deviceId);$("memberId").value=memberId;$("deviceId").value=deviceId;}
+$("memberId").value=localStorage.getItem("bp_member_id")||"";
+$("deviceId").value=localStorage.getItem("bp_device_id")||"";
+agent("/health").then(()=>show("本机设备代理已连接。可以开始设备登记或登录。")).catch(()=>show("未连接本机设备代理。请先在 Raspberry Pi 启动 device_agent.py。"));
+
+$("bootstrap").onclick=async()=>{
+ try{
+  show("正在创建管理员安全密钥注册挑战…");
+  const key=await deviceKey();
+  const secret=$("bootstrapSecret").value;
+  const start=await api("/admin/bootstrap/start",{name:$("adminName").value,devicePublicKey:key},{"X-Bootstrap-Secret":secret});
+  show("请插入管理员 FIDO2 安全密钥并完成浏览器验证…");
+  const credential=await registerSecurityKey(start.options);
+  const finish=await api("/admin/bootstrap/finish",{flowId:start.flowId,credential},{"X-Bootstrap-Secret":secret});
+  saveIds(finish.memberId,finish.deviceId);
+  $("bootstrapSecret").value="";
+  show("管理员初始化成功。请妥善保存 Raspberry Pi 和安全密钥。");
+  await loadMembers();
+ }catch(e){show("管理员初始化失败："+e.message);}
+};
+
+$("enroll").onclick=async()=>{
+ try{
+  show("正在读取 Raspberry Pi 设备密钥…");
+  const key=await deviceKey();
+  const start=await api("/enroll/start",{inviteToken:$("inviteToken").value.trim(),name:$("memberName").value,devicePublicKey:key});
+  show("请插入你的 FIDO2 安全密钥并完成注册…");
+  const credential=await registerSecurityKey(start.options);
+  const finish=await api("/enroll/finish",{flowId:start.flowId,credential});
+  saveIds(finish.memberId,finish.deviceId);
+  show("注册成功，当前状态：等待管理员批准。批准后再登录。\n成员 ID："+finish.memberId+"\n设备 ID："+finish.deviceId);
+ }catch(e){show("成员注册失败："+e.message);}
+};
+
+$("login").onclick=async()=>{
+ try{
+  const memberId=$("memberId").value.trim(),deviceId=$("deviceId").value.trim();
+  if(!memberId||!deviceId)throw new Error("请填写成员 ID 和设备 ID。");
+  saveIds(memberId,deviceId);
+  show("正在向服务器申请登录挑战…");
+  const start=await api("/auth/start",{memberId,deviceId});
+  show("请使用已登记的 FIDO2 安全密钥验证…");
+  const credential=await authenticateSecurityKey(start.options);
+  show("正在验证 Raspberry Pi 设备密钥…");
+  const deviceSignature=await signDevice(start.deviceChallenge);
+  await api("/auth/finish",{flowId:start.flowId,credential,deviceSignature});
+  show("登录成功。现在可以打开你的 BLACK-PRIVATE 聊天邀请链接。");
+ }catch(e){show("登录失败："+e.message);}
+};
+
+$("logout").onclick=async()=>{try{await api("/auth/logout",{});show("已退出登录。");}catch(e){show("退出失败："+e.message);}};
+$("makeInvite").onclick=async()=>{
+ try{
+  const result=await api("/admin/invite",{});
+  $("inviteOutput").classList.remove("hidden");
+  $("inviteOutput").textContent="一次性邀请令牌（24 小时有效）：\n"+result.inviteToken;
+ }catch(e){show("生成邀请失败："+e.message);}
+};
+async function loadMembers(){
+ try{
+  const result=await api("/admin/members",{});
+  $("members").innerHTML="";
+  for(const m of result.members){
+   const devices=result.devices.filter(d=>d.memberId===m.id);
+   const item=document.createElement("div");item.className="item";
+   const title=document.createElement("strong");title.textContent=m.name+" · "+m.role;
+   const state=document.createElement("span");state.className="pill";state.textContent=m.status;
+   item.append(title,state);
+   for(const d of devices){
+    const line=document.createElement("p");line.className="small";line.textContent="设备 "+d.id+" · "+d.status;
+    item.append(line);
+    if(m.status==="pending"||d.status==="pending"){
+     const approve=document.createElement("button");approve.textContent="批准成员与设备";
+     approve.onclick=async()=>{try{await api("/admin/approve",{memberId:m.id,deviceId:d.id});await loadMembers();show("已批准。");}catch(e){show(e.message);}};
+     item.append(approve);
+    }
+    if(d.status!=="revoked"){
+     const revoke=document.createElement("button");revoke.className="danger";revoke.textContent="撤销设备";
+     revoke.onclick=async()=>{try{await api("/admin/revoke-device",{deviceId:d.id});await loadMembers();show("设备已撤销。");}catch(e){show(e.message);}};
+     item.append(revoke);
+    }
+   }
+   if(m.role!=="admin"&&m.status!=="revoked"){
+    const revokeMember=document.createElement("button");revokeMember.className="danger";revokeMember.textContent="撤销成员";
+    revokeMember.onclick=async()=>{try{await api("/admin/revoke-member",{memberId:m.id});await loadMembers();show("成员及其设备已撤销。");}catch(e){show(e.message);}};
+    item.append(revokeMember);
+   }
+   $("members").append(item);
+  }
+ }catch(e){show("无法读取成员列表："+e.message);}
+}
+$("refresh").onclick=loadMembers;
+</script></body></html>
