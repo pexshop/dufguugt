@@ -37,8 +37,23 @@ This proves possession of the agent's private key, not the physical identity of
 the board. A software key can be copied. Stronger proof requires compatible
 TPM 2.0 or secure-element hardware and a separately verified attestation flow.
 
+## Device enrollment console
+
+After the Worker branch has been deployed to a staging environment and its
+required secrets are configured, open:
+
+`https://dufguugt.jaksj468.workers.dev/device.html`
+
+Use the same browser on the Raspberry Pi where the local agent is running.
+The console supports first-admin setup, member enrollment, FIDO2 login,
+administrator invitations, approvals, and revocation.
+
 ## Current implementation boundary
 
-The Worker endpoints and local agent are backend components. The public chat
-page has not yet been updated with enrollment/login controls, so end-to-end
-member onboarding is not ready. Do not deploy this branch to production yet.
+The Worker bundle and Python agent have passed the repository CI dry-run and
+syntax checks. This is not a live Cloudflare deployment or a real-hardware
+security test. Before production use, test the complete enrollment and login
+flow with a real Pi and FIDO2 key, confirm unauthenticated direct WebSocket
+requests receive HTTP 401, confirm revoked sessions are rejected, and perform
+a security review. Do not deploy this branch to production until those checks
+are complete.
