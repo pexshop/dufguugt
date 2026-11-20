@@ -1,0 +1,22 @@
+name: Validate BLACK-PRIVATE device gate
+
+on:
+  push:
+    branches:
+      - feature/raspberry-pi-device-gate
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  worker-dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install
+      - name: Validate Worker bundle without deploying
+        run: npx wrangler deploy --dry-run
