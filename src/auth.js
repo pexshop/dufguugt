@@ -310,6 +310,14 @@ export async function handleAuth(request, env) {
       return json({ revoked: true });
     }
 
+    if (path === "/api/auth/status") {
+      const session = await currentSession(request, env);
+      return json({
+        authenticated: Boolean(session),
+        member: session ? { id: session.member.id, name: session.member.name, role: session.member.role } : null,
+      });
+    }
+
     if (path === "/api/auth/logout") {
       const token = cookieValue(request, "bp_session");
       if (token) await del(env, `session:${await digest(token)}`);
@@ -324,6 +332,5 @@ export async function handleAuth(request, env) {
 }
 
 export async function authorizeRoom(request, env) {
-  const session = await currentSession(request, env);
-  return Boolean(session);
+  return await currentSession(request, env);
 }
