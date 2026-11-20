@@ -2,6 +2,10 @@ name = "black-private"
 main = "src/index.js"
 compatibility_date = "2026-11-20"
 
+[vars]
+RP_ID = "dufguugt.jaksj468.workers.dev"
+EXPECTED_ORIGIN = "https://dufguugt.jaksj468.workers.dev"
+
 [assets]
 directory = "./public"
 binding = "ASSETS"
